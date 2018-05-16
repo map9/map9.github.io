@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Autonomous Vehicle Driving Data Analyzer</title>
+    <link rel="stylesheet" href="https://openlayers.org/en/v4.6.5/css/ol.css" type="text/css">
+    <!-- The line below is only needed for old environments like Internet Explorer and Android 4.x -->
+    <script src="https://cdn.polyfill.io/v2/polyfill.min.js?features=requestAnimationFrame,Element.prototype.classList,URL"></script>
+    <script src="https://openlayers.org/en/v4.6.5/build/ol.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/1.3.3/FileSaver.min.js"></script>
+    <script src="https://d3js.org/d3.v4.min.js"></script>
+    <style>
+        html,
+        body {
+            color: #333;
+            background: #fff;
+            padding: 0;
+            margin: 0;
+            position: relative;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        .top,
+        .map,
+        .foot {
+            width: 100%;
+            position: absolute;
+        }
+
+        .top {
+            background: red;
+            top: 0;
+            height: 0px;
+        }
+
+        .map {
+            background: rgb(200, 200, 200);
+            top: 0px;
+            bottom: 250px;
+            height: auto;
+        }
+
+        .foot {
+            background: rgb(255, 255, 255);
+            bottom: 0;
+        }
+
+        .save-to-png {
+            top: 105px;
+            left: .5em;
+        }
+
+        .ol-touch .save-to-png {
+            top: 130px;
+        }
+
+        .fullscreen:-moz-full-screen {
+            height: 100%;
+        }
+
+        .fullscreen:-webkit-full-screen {
+            height: 100%;
+        }
+
+        .fullscreen:-ms-fullscreen {
+            height: 100%;
+        }
+
+        .fullscreen:fullscreen {
+            height: 100%;
+        }
+
+        .fullscreen {
+            width: 100%;
+            height: 100%;
+        }
+
+        .ol-rotate {
+            top: 3em;
+        }
+
+        svg text {
+            font-size: 10px;
+            font-family: sans-serif;
+        }
+
+        .zoom {
+            fill: none;
+            pointer-events: all;
+        }
+
+        .event-bubble {
+            fill: #888;
+            stroke-width: 1;
+            stroke: #888;
+            fill-opacity: 0.8;
+            stroke-opacity: 0.5;
+        }
+
+        .selected {
+            stroke-width: 2;
+            stroke: #888;
+            fill-opacity: 1.0;
+            stroke-opacity: 0.5;
+        }
+
+        .track-line {
+            fill: none;
+            stroke-width: 1;
+            stroke: #FC9E27;
+        }
+
+        .active-line {
+            fill: none;
+            stroke-width: 2;
+            stroke: blue;
+            visibility: hidden;
+        }
+
+        .legend-box {
+            stroke-width: 1;
+            stroke: #888;
+        }
+
+        .test {
+            fill: #E7BA52;
+            fill: #D6616B;
+            fill: #B5CF6B;
+            fill: #FC9E27;
+            fill: #3A7FA3;
+            fill: #C8DDEC;
+            fill: #888888;
+            fill: #FFFFFF;
+            fill: #FFF0FF;
+            fill: #FAFFFF;
+            fill: #FA0000;
+            fill: #FAFAFA;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="fullscreen" class="fullscreen">
+        <div id="foot" class="top"></div>
+        <div id="map" class="map"></div>
+        <div id="foot" class="foot">
+            <svg width="1300" height="250"></svg>
+        </div>
+    </div>
+    <script>
+        var EARTH_RADIUS = 6378137.0;
+        var PI = Math.PI;
+
+        function getRad(d) {
+            return d * PI / 180.0;
+        }
+
+        /** 
+         * caculate the great circle distance unit: meter
+         * @param {Object} lat1 
+         * @param {Object} lng1 
+         * @param {Object} lat2 
+         * @param {Object} lng2 
+         */
+        function getGreatCircleDistance(lng1, lat1, lng2, lat2) {
+            var radLat1 = getRad(lat1);
+            var radLat2 = getRad(lat2);
+
+            var a = radLat1 - radLat2;
+            var b = getRad(lng1) - getRad(lng2);
+
+            var s = 2 * Math.asin(Math.sqrt(Math.pow(Math.sin(a / 2), 2) + Math.cos(radLat1) * Math.cos(radLat2) * Math.pow(Math.sin(b / 2), 2)));
+            s = s * EARTH_RADIUS;
+            s = Math.round(s * 10000) / 10000.0;
+
+            return s;
+        }
+    </script>
+    <script>
+        /**
+         * Define a namespace for the application.
+         */
+        window.app = {};
+        var app = window.app;
+
+        //
+        // Define save to png control.
+        //
+
+        /**
+         * @constructor
+         * @extends {ol.control.Control}
+         * @param {Object=} opt_options Control options.
+         */
+        app.SavetoPNGControl = function (opt_options) {
+            var options = opt_options || {};
+
+            var button = document.createElement('button');
+            button.innerHTML = 'S';
+
+            var this_ = this;
+            var handleSavetoPNG = function () {
+                this_.getMap().once('postcompose', function (event) {
+                    var canvas = event.context.canvas;
+                    if (navigator.msSaveBlob) {
+                        navigator.msSaveBlob(canvas.msToBlob(), 'map.png');
+                    } else {
+                        canvas.toBlob(function (blob) {
+                            saveAs(blob, 'map.png');
+                        });
+                    }
+                });
+                this_.getMap().renderSync();
+            };
+
+            button.addEventListener('click', handleSavetoPNG, false);
+            button.addEventListener('touchstart', handleSavetoPNG, false);
+
+            var element = document.createElement('div');
+            element.className = 'save-to-png ol-unselectable ol-control';
+            element.appendChild(button);
+
+            ol.control.Control.call(this, {
+                element: element,
+                target: options.target
+            });
+
+        };
+        ol.inherits(app.SavetoPNGControl, ol.control.Control);
+    </script>
+    <script> 
+        d3.csv("test.csv", type, function (error, data) {
+            if (error) throw error;
+
+            let [domainx1, domainx2] = [
+                data[0].time,//d3.min(data, function (d) { return d.time; }),
+                data[data.length-1].time];//d3.max(data, function (d) { return d.time; })];
+
+            // create range event data
+            var rangeEventData = new Array;
+            var rangeEventKey = [0, 1, 4, 9];
+            var rangeEventColor = d3.scaleOrdinal().range(["#FAFAFA", "#C8C8FF", "#FA0000", "#FFFFFF"])
+                .domain(rangeEventKey);
+            var rangeEventText = d3.scaleOrdinal().range(["manual driving", "autonomous driving", "disengagement", "unknown"])
+                .domain(rangeEventKey);
+
+            // create track line data
+            var trackLineData = new Array;
+            // get statics data
+            var trackLineTotalDistance;
+            var rangeEventSpanDistance = new Map;
+            var rangeEventSpanTime = new Map;
+
+            function addRangeEventSpanStatics(mode, time, dis) {
+                let lastTime = rangeEventSpanTime.get(mode);
+                let lastDistance = rangeEventSpanDistance.get(mode);
+                if (lastTime === undefined)
+                    rangeEventSpanTime.set(mode, time);
+                else
+                    rangeEventSpanTime.set(mode, time + lastTime);
+
+                if (lastDistance === undefined)
+                    rangeEventSpanDistance.set(mode, dis);
+                else
+                    rangeEventSpanDistance.set(mode, dis + lastDistance);
+            }
+
+            // create vector datasource
+            var vectorSource = new ol.source.Vector();
+
+            let lastDriveMode;
+            let driveModeStartTime, driveModeEndTime;
+            let driveModeDistance;
+            data.forEach(function (v, i, a) {
+                var driveMode = v.drive_mode;
+                if (driveMode != 0 && driveMode != 1 && driveMode != 4)
+                    driveMode = 9;
+
+                if (0 == i) {
+                    driveModeStartTime = v.time;
+                    driveModeEndTime = driveModeStartTime;
+                    driveModeDistance = 0;
+                    lastDriveMode = driveMode;
+
+                    trackLineTotalDistance = 0;
+                    trackLineData.push({ x: v.time, speed: 0, distance: driveModeDistance });
+                } else {
+                    let distance = getGreatCircleDistance(v.longitude, v.latitude, a[i - 1].longitude, a[i - 1].latitude);
+                    driveModeDistance += distance;
+                    driveModeEndTime = v.time;
+
+                    if (driveMode != lastDriveMode) {
+                        rangeEventData.push({ kind: lastDriveMode, x0: driveModeStartTime, x1: driveModeEndTime, distance: driveModeDistance });
+                        addRangeEventSpanStatics(lastDriveMode, driveModeEndTime - driveModeStartTime, driveModeDistance);
+                        driveModeStartTime = v.time;
+                        driveModeEndTime = driveModeStartTime;
+                        driveModeDistance = 0;
+
+                        lastDriveMode = driveMode;
+                    }
+
+                    trackLineTotalDistance += distance;
+                    trackLineData.push({ x: v.time, speed: distance * 3600 / (v.time - a[i - 1].time), distance: trackLineTotalDistance });
+                }
+
+                // convert baidu wgs84 to web mercator
+                let p = ol.proj.fromLonLat([v.longitude, v.latitude]);
+                // sift 
+                p[0] -= 1446.50;
+                p[1] -= 1028.50;
+
+                let f = new ol.Feature(new ol.geom.Point(p));
+                // this is for heat map
+                f.setId(i);
+                f.set('visible', 1, true);
+                f.set('weight', driveMode);
+                f.set('time', v.time);
+                vectorSource.addFeature(f);
+            });
+
+            if (data && data.length) {
+                rangeEventData.push({ kind: lastDriveMode, x0: driveModeStartTime, x1: driveModeEndTime, distance: driveModeDistance });
+                addRangeEventSpanStatics(lastDriveMode, driveModeEndTime - driveModeStartTime, driveModeDistance);
+            }
+                        
+            // create bubble event data
+            let randomX = d3.randomUniform(domainx1, domainx2),
+                randomY = d3.randomUniform(0, d3.max(trackLineData, function (d) { return d.speed; }));
+            randomT = d3.randomUniform(1, 6);
+
+            var bubbleEventData = d3.range(10).map(function () { return { kind: parseInt(randomT()), x: randomX(), y: randomY() }; });
+            var bubbleEventColor = d3.scaleOrdinal().range(["#E7BA52", "#D6616B", "#B5CF6B", "#3A7FA3", "#C8DDEC"]);
+            bubbleEventColor.domain([1, 2, 3, 4, 5]);
+
+            // data management functions
+            // find range event item by binary search
+            function getRangeEventItem(mx, red) {
+                if (!red) return;
+                let start = 0,
+                    end = red.length - 1;
+
+                while (start <= end) {
+                    let mid = parseInt(start + (end - start) / 2);
+                    let item = red[mid];
+                    if ((mx >= item.x0) && (mx <= item.x1)) {
+                        return item;
+                    } else if (mx > item.x0) {
+                        start = mid + 1;
+                    } else {
+                        end = mid - 1;
+                    }
+                }
+            }
+
+            // find track item by binary search
+            function getTrackLineItem(mx, tld) {
+                if (!tld) return;
+                let start = 0,
+                    end = tld.length - 1,
+                    dis = Infinity,
+                    ret;
+                //let count = 0;    
+
+                while (start <= end) {
+                    let mid = parseInt(start + (end - start) / 2);
+                    let item = tld[mid];
+                    let d = mx - item.x;
+                    d = d > 0 ? d : -d;
+                    if (mx > item.x) {
+                        start = mid + 1;
+                    } else {
+                        end = mid - 1;
+                    }
+                    if (d < dis) { // find closed item   
+                        dis = d;
+                        ret = item;    
+                    } 
+                    //count ++;
+                    //console.log(count+","+"start:" +start+",end:"+end+",dis:"+dis+",d:"+d);
+                }
+                //console.log(count + ", get it!");
+                return ret;
+            }
+
+            // find feature item by binary search
+            function getFeatureItem(mx, source) {
+                if (!source) return;
+                let start = 0,
+                    end = source.getFeatures().length - 1,
+                    dis = Infinity,
+                    ret;
+                //let count = 0;
+
+                while (start <= end) {
+                    let mid = parseInt(start + (end - start) / 2);
+                    let item = source.getFeatureById(mid);
+                    let time = item.get('time');
+                    let d = mx - time;
+                    d = d > 0 ? d : -d;
+                    if (mx > time) {
+                        start = mid + 1;
+                    } else {
+                        end = mid - 1;
+                    }
+                    if (d < dis) { // find closed item   
+                        dis = d;
+                        ret = item;    
+                    } 
+                    //count ++;
+                    //console.log(count+","+"start:" +start+",end:"+end+",dis:"+dis+",d:"+d);
+                }
+                //console.log(count + ", get it!");
+                return ret;
+            }
+            
+            // unit: m
+            function formatDistance(d) {
+                if (d === undefined) return "null";
+                if (d >= 1000) {
+                    d = d / 1000;
+                    return d.toFixed(2) + "km";
+                }
+                return d.toFixed(1) + "m";
+            }
+
+            // unit: ms
+            function formatSpanTime(d) {
+                if (d === undefined) return "null";
+                if (d >= 1000 && d < 60000) {
+                    d = d / 1000;
+                    return d.toFixed(1) + "s";
+                } else if (d >= 60000 && d < 3600000) {
+                    let s = d / 60000;
+                    d = (d - parseInt(s) * 60000) / 1000;
+                    return s.toFixed(0) + "m" + d.toFixed(1) + "s";
+                } else if (d >= 3600000) {
+                    let h = d / 3600000;
+                    let m = (d - parseInt(h) * 3600000) / 60000;
+                    d = (m - parseInt(m)) * 60;
+                    return h.toFixed(0) + "h" + m.toFixed(0) + "m" + d.toFixed(1) + "s";
+                }
+
+                return d.toFixed(0) + "ms";
+            }
+
+            /**
+             * Build map chart
+             */
+
+            // Define features style
+            var style = {
+                'Point': new ol.style.Style({
+                    image: new ol.style.Circle({
+                        fill: new ol.style.Fill({
+                            color: 'rgba(128,128,128,1)',
+                        }),
+                        radius: 3,
+                        stroke: new ol.style.Stroke({
+                            color: 'rgba(128,128,128,1)',
+                            width: 1
+                        })
+                    })
+                }),
+                'LineString': new ol.style.Style({
+                    stroke: new ol.style.Stroke({
+                        color: 'rgba(128,128,128,1)',
+                        width: 1
+                    })
+                }),
+                'MultiLineString': new ol.style.Style({
+                    stroke: new ol.style.Stroke({
+                        color: 'rgba(128,128,128,1)',
+                        width: 1
+                    })
+                })
+            };
+
+            // Add raster layer
+            var raster = new ol.layer.Tile({
+                source: new ol.source.BingMaps({
+                    imagerySet: 'AerialWithLabels',
+                    key: 'AuhiCJHlGzhg93IqUH_oCpl_-ZUrIE6SPftlyGYUvr9Amx5nzA-WqGcPquyFZl4L'
+                })
+            });
+
+            let coordCircleSize = 3.5,
+                coordCircleSelectedSize = 5,
+                coordCircleSelectedColor = "#0000FF";
+            let styleCache = {},
+                lastSelectedFeatureId = null;
+
+            function styleFunction(feature) {
+                let v = feature.get('visible');
+                if (0 == v) return null;
+
+                let isSelected = false;
+                if ((null != lastSelectedFeatureId) && feature.getId() == lastSelectedFeatureId) isSelected = true;
+                let color =  isSelected ? coordCircleSelectedColor : rangeEventColor(feature.get('weight'));
+                let colorSize = isSelected ? coordCircleSelectedSize : coordCircleSize;
+                
+                let style = styleCache[color];
+                if (!style) {
+                    style = new ol.style.Style({
+                        image: new ol.style.Circle({
+                            fill: new ol.style.Fill({
+                                color: color
+                            }),
+                            radius: coordCircleSize,
+                            stroke: new ol.style.Stroke({
+                                color: 'rgba(128, 128, 128, 1)',
+                                width: 1
+                            })
+                        })
+                    });
+                    styleCache[color] = style;
+                }
+                return style;
+            };
+
+            var trackVector = new ol.layer.Vector({
+                source: vectorSource,
+                projection: 'EPSG:4326',
+                style: styleFunction,
+            });
+
+            var background = new ol.layer.Vector({
+                renderMode: 'image',
+                source: new ol.source.Vector({
+                    url: 'background.geojson',
+                    format: new ol.format.GeoJSON()
+                }),
+                style: function (feature) {
+                    return style[feature.getGeometry().getType()];
+                }
+            });
+
+            var map = new ol.Map({
+                layers: [
+                    raster,
+                    //background,
+                    trackVector,
+                ],
+                target: document.getElementById('map'),
+                controls: ol.control.defaults({
+                    attributionOptions: {
+                        collapsible: false
+                    }
+                }).extend([
+                    new ol.control.ScaleLine({
+                        units: 'metric',
+                    }),
+                    new ol.control.ZoomToExtent({
+                        extent: [12923460.033433976, 4878874.570174953, 12924289.422417076, 4879267.827959673]
+                    }),
+                    new app.SavetoPNGControl(),
+                    new ol.control.FullScreen({
+                        source: 'fullscreen'
+                    }),
+                ]),
+                view: new ol.View({
+                    center: [12923874.73, 4879071.199],
+                    zoom: 17
+                })
+            });
+
+            /**
+             * Build foot chart
+             */
+            let id_size = 3; // identify object screen size
+            let bubbleCircleSize = 3.5,
+                bubbleCircleSelectedSize = 5,
+                bubbleCircleSelectedColor = "#0000FF";
+
+            let rangeType = false; // true: multi line by kind, false: one line
+
+            // create main svg node
+            var svg = d3.select("svg") // modify svg width
+                .attr("width", window.innerWidth || document.documentElement.clientWidth || document.getElementsByTagName('body')[0].clientWidth);
+            var margin = { top: 100, right: 20, bottom: 20, left: 30 };
+            var panWidth = svg.attr("width") - margin.left - margin.right;
+            var panHeight = svg.attr("height") - margin.top - margin.bottom;
+            var g = svg.append("g")
+                .attr("transform", "translate(" + margin.left + "," + margin.top + ")")
+                .attr("width", panWidth)
+                .attr("height", panHeight);
+
+            // create main chart scale
+            var xScale = d3.scaleTime()
+                .domain([domainx1, domainx2])
+                .range([0, panWidth]);
+
+            var yScale = d3.scaleLinear()
+                .domain([0, d3.max(trackLineData, function (d) { return d.speed; })])
+                .range([panHeight, 0]);
+
+            var xAxis = d3.axisBottom(xScale);
+            var yAxis = d3.axisLeft(yScale);
+
+            // create main chart clip rect
+            g.append("clipPath")
+                .attr("id", "clip")
+                .append("rect")
+                .attr("width", panWidth)
+                .attr("height", panHeight);
+
+            // create range event y scale and chart
+            var yScaleRange = d3.scaleBand()
+                .range([panHeight, 0]);
+            yScaleRange.domain(rangeEventColor.domain());
+
+            g.append("g")
+                .attr("class", "event-range-chart")
+                .attr("clip-path", "url(#clip)")
+                .selectAll("rect")
+                .data(rangeEventData)
+                .enter().append("rect")
+                //.transition(t) // if add transition, elements can't create at this time
+                .attr("class", "event-range")
+                .attr("x", function (d) { return xScale(d.x0); })
+                .attr("y", rangeType ? function (d) { return yScaleRange(d.kind); } : 0)
+                .attr("width", function (d) { return xScale(d.x1) - xScale(d.x0); })
+                .attr("height", rangeType ? function (d) { return yScaleRange.bandwidth(); } : panHeight)
+                .style("fill", function (d) { return rangeEventColor(d.kind); })
+            var eventRanges = g.selectAll("rect.event-range");
+
+            // create bubble event chart
+            g.append("g")
+                .attr("class", "event-bubble-chart")
+                .attr("clip-path", "url(#clip)")
+                .selectAll("circle")
+                .data(bubbleEventData)
+                .enter().append("circle")
+                //.transition(t) // if add transition, elements can't create at this time
+                .attr("transform", function (d) { return "translate(" + xScale(d.x) + "," + yScale(d.y) + ")"; })
+                .attr("class", "event-bubble")
+                .style("fill", function (d) { return bubbleEventColor(d.kind); })
+                .attr("r", bubbleCircleSize);
+            let eventBubbles = g.selectAll("circle.event-bubble");
+
+            var trackLine = d3.line()
+                .curve(d3.curveStepAfter)
+                .x(function (d) { return xScale(d.x) })
+                .y(function (d) { return yScale(d.speed) });
+
+            // create track line chart
+            g.append("g")
+                .attr("class", "track-line-chart")
+                .attr("clip-path", "url(#clip)")
+                .append("path")
+                .datum(trackLineData)
+                .attr("class", "track-line")
+                .attr("d", trackLine);
+
+            // create main chart axis(Left, Bottom)
+            var xGroup = g.append("g")
+                .attr("class", "axis axis--x")
+                .attr("transform", "translate(0," + panHeight + ")")
+                .call(xAxis);
+
+            var yGroup = g.append("g")
+                .attr("class", "axis axis--y")
+                .attr("transform", "translate(0,0)")
+                .call(yAxis)
+                .append("text")
+                .attr("transform", "rotate(-90)")
+                .attr("x", -6)
+                .attr("y", 6)
+                .attr("dy", "0.71em")
+                .attr("fill", "#000")
+                .text("km / h");
+
+            // create active axis
+            var activeAxis = svg.append("g")
+                .attr("class", "axis active")
+                .attr("transform", "translate(" + margin.left + "," + margin.top + ")")
+                .append("line")
+                .attr("class", "active-line")
+                .attr("x1", 0)
+                .attr("x2", 0)
+                .attr("y1", 0)
+                .attr("y2", panHeight);
+
+            // create zoom rect at the end
+            var zoom = d3.zoom()
+                .scaleExtent([1, Infinity]) // zoom max：8， min：1
+                .translateExtent([[0, 0], [panWidth, panHeight]])
+                .extent([[0, 0], [panWidth, panHeight]])
+                .on("zoom", onzoom);
+
+            var zoomRect = svg.append("rect")
+                .attr("class", "zoom")
+                .attr("transform", "translate(" + margin.left + "," + margin.top + ")")
+                .attr("width", panWidth)
+                .attr("height", panHeight)
+                .on("mousemove", onmousemove)
+                .on("mouseover", onmouseover)
+                .on("mouseout", onmouseout)
+                .call(zoom);
+
+            // create index chart(brush)    
+            var g2 = svg.append("g")
+                .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+            var indexHeight = 20;
+            var brush = d3.brushX()
+                .extent([[0, 0], [panWidth, indexHeight]])
+                .on("brush end", onbrushend);
+
+            // create index axis    
+            var xIndexScale = d3.scaleTime()
+                .domain(xScale.domain())
+                .range([0, panWidth]);
+            var xIndexAxis = d3.axisTop(xIndexScale);
+
+            g2.append("g")
+                .attr("class", "axis axis--index--x")
+                .call(xIndexAxis);
+
+            var bIndexBox = g2.append("g")
+                .attr("transform", "translate(0, " + -indexHeight + ")") // bIndexBox on top
+                .attr("class", "brush-box");
+
+            bIndexBox.append("g")
+                .attr("class", "brush")
+                .call(brush)
+                .call(brush.move, xScale.range())
+
+            // create info pane
+            var infoLegendBoxHeight = 20,
+                infoLegendBoxWidth = 140;
+            var marginLegend = { top: 10, right: 20, bottom: 25, left: 50 };
+            var panLegendWidth = svg.attr("width") - marginLegend.left - marginLegend.right;
+            var panLegendHeight = svg.attr("height") - marginLegend.top - marginLegend.bottom - panHeight;
+            var infoPane = svg.append("g")
+                .attr("transform", "translate(" + marginLegend.left + "," + marginLegend.top + ")")
+                .attr("width", panLegendWidth)
+                .attr("height", panLegendHeight);
+
+            // create driving mode legend
+            var legend = infoPane.append("g")
+                .selectAll(".legend")
+                .data(rangeEventKey)
+                .enter().append("g")
+                .attr("class", "legend")
+                .attr("transform", function (d, i) {
+                    var x = panWidth + (i - 4) * infoLegendBoxWidth;
+                    return "translate(" + x + ",0)";
+                });
+
+            legend.append("rect")
+                .attr("class", "legend-box")
+                .attr("x", 0)
+                .attr("width", infoLegendBoxHeight - 2)
+                .attr("height", infoLegendBoxHeight - 2)
+                .attr("fill", rangeEventColor);
+
+            legend.append("text")
+                .attr("class", "legend-text")
+                .attr("x", 22)
+                .attr("y", 8)
+                .attr("dy", ".35em")
+                .style("text-anchor", "begin")
+                .style("font", "12px sans-serif")
+                //.style("fill" ,function(d) { return rangeEventColor(d); })
+                .text(function (d) { return rangeEventText(d); });
+
+            // create statics by driving mode 
+            var statics = infoPane.append("g")
+                .selectAll(".statics")
+                .data(rangeEventKey)
+                .enter().append("g")
+                .attr("class", "statics")
+                .attr("transform", function (d, i) {
+                    var x = panWidth + (i - 4) * infoLegendBoxWidth;
+                    return "translate(" + x + "," + infoLegendBoxHeight + ")";
+                });
+
+            statics.append("text")
+                .attr("class", "statics-text")
+                .attr("x", 22)
+                .attr("y", 8)
+                .attr("dy", ".35em")
+                .style("text-anchor", "begin")
+                .style("font", "12px sans-serif")
+                .text(function (d, i) {
+                    let spanTime = (rangeEventSpanTime.get(d) === undefined) ? 0 : rangeEventSpanTime.get(d);
+                    let spanTimeRatio = spanTime * 100 / (domainx2 - domainx1);
+                    return formatSpanTime(spanTime) + "  " + spanTimeRatio.toFixed(1) + "%";
+                });
+
+            statics.append("text")
+                .attr("class", "statics-text")
+                .attr("x", 22)
+                .attr("y", 8 + infoLegendBoxHeight)
+                .attr("dy", ".35em")
+                .style("text-anchor", "begin")
+                .style("font", "12px sans-serif")
+                .text(function (d, i) {
+                    let spanDistance = (rangeEventSpanDistance.get(d) === undefined) ? 0 : rangeEventSpanDistance.get(d);
+                    let spanDistanceRatio = spanDistance * 100 / trackLineTotalDistance;
+                    return formatDistance(spanDistance) + "  " + spanDistanceRatio.toFixed(1) + "%";
+                });
+
+            // create mouse tip info            
+            var tipInfo = infoPane.append("g")
+                .selectAll(".tipinfo")
+                .data([0, 1, 2])
+                .enter().append("g")
+                .attr("class", "tipinfo")
+                .attr("transform", function (d, i) {
+                    var y = i * infoLegendBoxHeight;
+                    return "translate(0," + y + ")";
+                });
+
+            tipInfo.append("text")
+                .attr("class", "tipinfo-text")
+                .attr("x", 0)
+                .attr("y", 4)
+                .attr("dy", ".35em")
+                .style("text-anchor", "begin")
+                .style("font", "16px sans-serif")
+                .text("");
+
+            function onzoom() {
+                //if (d3.event.sourceEvent && d3.event.sourceEvent.type === "brush") return; // ignore zoom-by-brush, if add this can't pan smooth
+
+                var t = d3.event.transform.rescaleX(xIndexScale);
+                xScale.domain(t.domain()); // if don't add this line, there will be error in xscale 
+                xGroup.call(xAxis.scale(t)); // t = xScale
+                eventBubbles.attr("transform", function (d) { return "translate(" + t(d.x) + "," + yScale(d.y) + ")"; });
+                eventRanges.attr("x", function (d) { return t(d.x0); })
+                    .attr("width", function (d) { return t(d.x1) - t(d.x0); })
+
+                g.select("path.track-line").attr("d", trackLine.x(function (d) { return t(d.x); }));
+
+                // modify index range
+                bIndexBox.select(".brush")
+                    .call(brush.move, xScale.range().map(d3.event.transform.invertX, d3.event.transform));
+
+                let selectedDomain = xScale.domain();
+                let source = trackVector.getSource();
+                let features = source.getFeatures();
+                let length = features.length;
+                let selectedDomainx = selectedDomain[0].getTime();
+                let selectedDomainy = selectedDomain[1].getTime();                
+                for(let i = 0; i < length; i ++) {
+                    let item = features[i];
+                    let time = item.get('time');
+                    if (time < selectedDomainx || time > selectedDomainy)
+                        item.set('visible', 0, true);
+                    else
+                        item.set('visible', 1, true);
+                }
+                source.dispatchEvent('change');
+            }
+
+            function onbrushend() {
+                if (d3.event.sourceEvent && d3.event.sourceEvent.type === "zoom") return; // ignore brush-by-zoom
+
+                var s = d3.event.selection || xIndexScale.range();
+                xScale.domain(s.map(xIndexScale.invert, xIndexScale));
+                zoomRect.call(zoom.transform, d3.zoomIdentity
+                    .scale(panWidth / (s[1] - s[0]))
+                    .translate(-s[0], 0));
+            }
+
+            function onmousemove(d, i) {
+                if (d3.event.defaultPrevented) return; // zoom
+
+                let point = d3.mouse(this); // convert mouse coordinates to this svg object
+                let [sizex, sizey] = [xScale.invert(point[0] - id_size), xScale.invert(point[0] + id_size)];
+                eventBubbles.each(function (d, i) {
+                    if ((d.x >= sizex) && (d.x <= sizey)) {
+                        if (-1 == d3.select(this).attr("class").indexOf("selected")) {
+                            d3.select(this).transition()
+                                .duration(200)
+                                .attr("class", "event-bubble selected")
+                                .style("fill", bubbleCircleSelectedColor)
+                                .attr("r", bubbleCircleSelectedSize);
+                        }
+                    } else {
+                        if (d3.select(this).attr("class").indexOf("selected")) {
+                            d3.select(this).transition()
+                                .duration(200)
+                                .attr("class", "event-bubble")
+                                .style("fill", function (d) { return bubbleEventColor(d.kind); })
+                                .attr("r", bubbleCircleSize);
+                        }
+                    }
+                });
+
+                activeAxis.attr("transform", function (d) { return "translate(" + point[0] + ", 0)"; });
+
+                // display tip info                
+                let t = xScale.invert(point[0]);
+                let ri = getRangeEventItem(t, rangeEventData);
+                let ti = getTrackLineItem(t, trackLineData);
+
+                // if (ti != undefined) t = ti.x;
+
+                let format = d3.timeFormat('%Y/%m/%d %H:%M:%S.%L');
+                let info = format(t);
+                let tipInfoTexts = new Array;
+                tipInfoTexts[0] = info;
+                if (ri != undefined) {
+                    info = "Mode: " + rangeEventText(ri.kind) + ", " + formatSpanTime(ri.x1 - ri.x0) + ", " + formatDistance(ri.distance);
+                    tipInfoTexts[1] = info;
+                }
+                if (ti != undefined) {
+                    info = "Speed: " + ti.speed.toFixed(2) + "m/s, Distance: " + formatDistance(ti.distance);
+                    tipInfoTexts[2] = info;
+                }
+                infoPane.selectAll(".tipinfo-text").text(function (d) {
+                    return tipInfoTexts[d];
+                });
+
+                let source = trackVector.getSource();
+                let fi = getFeatureItem(t, source);
+                let redraw = false;
+                if (null != lastSelectedFeatureId) {
+                    lastSelectedFeatureId = null;
+                    redraw = true;
+                }
+                if (fi != undefined) {
+                    lastSelectedFeatureId = fi.getId();
+                    redraw = true;    
+                }
+                if (redraw) source.dispatchEvent('change');
+            }
+
+            function onmouseover(d, i) {
+                if (d3.event.defaultPrevented) return; // zoom
+
+                activeAxis.style("visibility", "visible");
+
+                if (null != lastSelectedFeatureId) {
+                    lastSelectedFeatureId = null;
+                    trackVector.getSource().dispatchEvent('change');
+                }
+            }
+
+            function onmouseout(d, i) {
+                if (d3.event.defaultPrevented) return; // zoom
+
+                activeAxis.style("visibility", "hidden");
+
+                eventBubbles.each(function (d, i) {
+                    if (d3.select(this).attr("class").indexOf("selected")) {
+                        d3.select(this).transition()
+                            .duration(200)
+                            .attr("class", "event-bubble")
+                            .style("fill", function (d) { return bubbleEventColor(d.kind); })
+                            .attr("r", bubbleCircleSize);
+                    }
+                });
+                infoPane.selectAll(".tipinfo-text").text("");
+
+                displayNormalTipInfo();
+            }
+
+            function displayNormalTipInfo() {
+                let format = d3.timeFormat('%Y/%m/%d  %H:%M:%S');
+                let info = format(domainx1);
+                info += " - " + format(domainx2);
+                info += ", " + formatSpanTime(domainx2 - domainx1);
+                var tipInfoTexts = new Array;
+                tipInfoTexts[0] = info;
+                info = "Distance: " + formatDistance(trackLineTotalDistance);
+                tipInfoTexts[1] = info;
+                var speed = trackLineTotalDistance * 3600 / (domainx2 - domainx1);
+                info = "Avg-Speed: " + speed.toFixed(2) + "m/s";
+                tipInfoTexts[2] = info;
+
+                infoPane.selectAll(".tipinfo-text").text(function (d) {
+                    return tipInfoTexts[d];
+                });
+            }
+        });
+
+        function type(d) {
+            d.drive_mode = +d.drive_mode;
+            d.time = parseFloat(d.time) * 1000;
+            d.latitude = +d.latitude;
+            d.longitude = +d.longitude;
+            return d;
+        }
+    </script>
+</body>
+
+</html>
